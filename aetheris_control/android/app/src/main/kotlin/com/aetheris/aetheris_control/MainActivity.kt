@@ -19,6 +19,8 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Bundle
+import android.view.Display
 import android.os.Environment
 import android.os.StatFs
 import android.os.SystemClock
@@ -53,10 +55,40 @@ class MainActivity : FlutterActivity() {
     private var compassEventListener: SensorEventListener? = null
     private var currentCompassHeading: Float = 0f
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableHighRefreshRate(120.0f)
+    }
+
     override fun onResume() {
         super.onResume()
+        enableHighRefreshRate(120.0f)
         handleWallpaperIntent(intent)
         resumeCompass()
+    }
+
+    private fun enableHighRefreshRate(targetFps: Float = 120.0f) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val modes = display?.supportedModes ?: emptyArray()
+                val targetMode = modes.firstOrNull { Math.abs(it.refreshRate - targetFps) < 2.0f }
+                    ?: modes.maxByOrNull { it.refreshRate }
+                if (targetMode != null) {
+                    val params = window.attributes
+                    params.preferredDisplayModeId = targetMode.modeId
+                    window.attributes = params
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val modes = windowManager.defaultDisplay.supportedModes
+                val targetMode = modes.firstOrNull { Math.abs(it.refreshRate - targetFps) < 2.0f }
+                    ?: modes.maxByOrNull { it.refreshRate }
+                if (targetMode != null) {
+                    val params = window.attributes
+                    params.preferredDisplayModeId = targetMode.modeId
+                    window.attributes = params
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     override fun onPause() {
@@ -647,6 +679,7 @@ class MainActivity : FlutterActivity() {
         System.gc()
         when (mode) {
             "WARP" -> {
+                enableHighRefreshRate(120.0f)
                 try {
                     Settings.System.putFloat(contentResolver, "min_refresh_rate", 120.0f)
                     Settings.System.putFloat(contentResolver, "peak_refresh_rate", 120.0f)
@@ -654,11 +687,12 @@ class MainActivity : FlutterActivity() {
                 } catch (_: Exception) {}
                 try {
                     Settings.Global.putFloat(contentResolver, Settings.Global.WINDOW_ANIMATION_SCALE, 0.5f)
-                    Settings.Global.putFloat(contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE, 0.5f)
-                    Settings.Global.putFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0.5f)
+                    Settings.Global.TRANSITION_ANIMATION_SCALE.let { Settings.Global.putFloat(contentResolver, it, 0.5f) }
+                    Settings.Global.ANIMATOR_DURATION_SCALE.let { Settings.Global.putFloat(contentResolver, it, 0.5f) }
                 } catch (_: Exception) {}
             }
             "ORBITAL" -> {
+                enableHighRefreshRate(120.0f)
                 try {
                     Settings.System.putFloat(contentResolver, "min_refresh_rate", 60.0f)
                     Settings.System.putFloat(contentResolver, "peak_refresh_rate", 120.0f)
@@ -670,6 +704,7 @@ class MainActivity : FlutterActivity() {
                 } catch (_: Exception) {}
             }
             "CRYO" -> {
+                enableHighRefreshRate(60.0f)
                 try {
                     Settings.System.putFloat(contentResolver, "min_refresh_rate", 60.0f)
                     Settings.System.putFloat(contentResolver, "peak_refresh_rate", 60.0f)
