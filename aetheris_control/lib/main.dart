@@ -83,6 +83,8 @@ class SolarisApp extends StatelessWidget {
 // =============================================================================
 class StarfieldPainter extends CustomPainter {
   final double shimmer;
+  static Size? _cachedSize;
+  static Shader? _cachedShader;
 
   // Fixed deterministic celestial star coordinates
   static final List<Offset> _fixedStars = [
@@ -98,16 +100,19 @@ class StarfieldPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 1. Deep Space Vignette
-    final bgPaint = Paint()
-      ..shader = RadialGradient(
+    // 1. Deep Space Vignette (Cached Shader)
+    if (_cachedShader == null || _cachedSize != size) {
+      _cachedSize = size;
+      _cachedShader = RadialGradient(
         center: const Alignment(0.0, -0.3),
         radius: 1.2,
-        colors: [
-          const Color(0xFF050B14),
+        colors: const [
+          Color(0xFF050B14),
           SolarisColors.spaceBlack,
         ],
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+    }
+    final bgPaint = Paint()..shader = _cachedShader;
     canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), bgPaint);
 
     // 2. Faint Orbital Arc (Curving across upper canopy)
@@ -497,13 +502,6 @@ class _SolarisAppIconState extends State<SolarisAppIcon> {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(radius),
           border: Border.all(color: SolarisColors.border, width: 0.8),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.50),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(radius),
@@ -1314,6 +1312,9 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
   StreamSubscription? _compassSubscription;
   double _compassHeading = 0.0;
   String _compassCardinal = 'N';
+  final ValueNotifier<double> _compassHeadingNotifier = ValueNotifier(0.0);
+  final ValueNotifier<String> _compassCardinalNotifier = ValueNotifier('N');
+  final ValueNotifier<DateTime> _clockNotifier = ValueNotifier(DateTime.now());
 
   late PageController _pageController;
   late AnimationController _starfieldController;
@@ -1400,9 +1401,12 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
       duration: const Duration(milliseconds: 250),
     );
 
-    // 1-second clock
+    // 1-second clock with isolated notifier (no root setState)
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _currentTime = DateTime.now());
+      if (mounted) {
+        _currentTime = DateTime.now();
+        _clockNotifier.value = _currentTime;
+      }
     });
 
     // Initial hardware & telemetry fetch
@@ -1425,6 +1429,9 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
     _compassSubscription?.cancel();
     _clockTimer?.cancel();
     _telemetryTimer?.cancel();
+    _compassHeadingNotifier.dispose();
+    _compassCardinalNotifier.dispose();
+    _clockNotifier.dispose();
     _pageController.dispose();
     _starfieldController.dispose();
     _launchAnimController.dispose();
@@ -1438,10 +1445,13 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
         (dynamic event) {
           if (event is num && mounted) {
             final deg = event.toDouble();
-            setState(() {
+            // Jitter filter: Only update when heading changes by at least 1.2 degrees
+            if ((deg - _compassHeading).abs() >= 1.2) {
               _compassHeading = deg;
               _compassCardinal = _calcCardinal(deg);
-            });
+              _compassHeadingNotifier.value = deg;
+              _compassCardinalNotifier.value = _compassCardinal;
+            }
           }
         },
         onError: (_) {},
@@ -1625,6 +1635,7 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
     if (_isMatrixOpen || _matrixAnimController.isAnimating) return;
     HapticFeedback.mediumImpact();
     platform.invokeMethod('playSciFiSound', {'sound': 'drawer_open'}).catchError((_) {});
+    _starfieldController.stop();
     setState(() => _isMatrixOpen = true);
     _matrixAnimController.forward(from: 0.0);
   }
@@ -1634,7 +1645,10 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
     HapticFeedback.lightImpact();
     platform.invokeMethod('playSciFiSound', {'sound': 'drawer_close'}).catchError((_) {});
     _matrixAnimController.reverse().then((_) {
-      if (mounted) setState(() => _isMatrixOpen = false);
+      if (mounted) {
+        setState(() => _isMatrixOpen = false);
+        _starfieldController.repeat();
+      }
     });
   }
 
@@ -1864,13 +1878,6 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
   // 1. PRIMARY BRIDGE PAGE (THE SPACECRAFT CONTROL CONSOLE)
   // ===========================================================================
   Widget _buildBridgePage(double topSafe, double bottomSafe) {
-    final timeHoursMins =
-        '${_currentTime.hour.toString().padLeft(2, '0')}:${_currentTime.minute.toString().padLeft(2, '0')}';
-    final secondsStr = _currentTime.second.toString().padLeft(2, '0');
-    final dateStr =
-        '${_getDayName(_currentTime.weekday)} · ${_currentTime.day} ${_getMonthName(_currentTime.month)} ${_currentTime.year}';
-    final stardate = 'STARDATE ${_currentTime.year}.${(_currentTime.month * 30 + _currentTime.day)}';
-
     final isCharging = _telemetry['isCharging'] == true;
     final cpuVal = _telemetry['cpuPercent'] ?? 14;
     final batVal = _telemetry['batteryLevel'] ?? 70;
@@ -1898,90 +1905,112 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  // LEFT: TIME, CALENDAR & STARDATE
+                  // LEFT: TIME, CALENDAR & STARDATE (ISOLATED CLOCK VALUE NOTIFIER)
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.baseline,
-                          textBaseline: TextBaseline.alphabetic,
+                    child: ValueListenableBuilder<DateTime>(
+                      valueListenable: _clockNotifier,
+                      builder: (context, currentTime, _) {
+                        final timeHoursMins =
+                            '${currentTime.hour.toString().padLeft(2, '0')}:${currentTime.minute.toString().padLeft(2, '0')}';
+                        final secondsStr = currentTime.second.toString().padLeft(2, '0');
+                        final dateStr =
+                            '${_getDayName(currentTime.weekday)} · ${currentTime.day} ${_getMonthName(currentTime.month)} ${currentTime.year}';
+                        final stardate = 'STARDATE ${currentTime.year}.${(currentTime.month * 30 + currentTime.day)}';
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.baseline,
+                              textBaseline: TextBaseline.alphabetic,
+                              children: [
+                                Text(
+                                  timeHoursMins,
+                                  style: const TextStyle(
+                                    fontFamily: 'Orbitron',
+                                    color: SolarisColors.textPrimary,
+                                    fontSize: 48,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 1.0,
+                                  ),
+                                ),
+                                const SizedBox(width: SolarisSpacing.xs),
+                                Text(
+                                  secondsStr,
+                                  style: const TextStyle(
+                                    fontFamily: 'JetBrainsMono',
+                                    color: SolarisColors.cyan,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
                             Text(
-                              timeHoursMins,
+                              dateStr.toUpperCase(),
                               style: const TextStyle(
-                                fontFamily: 'Orbitron',
-                                color: SolarisColors.textPrimary,
-                                fontSize: 48,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 1.0,
+                                fontFamily: 'Rajdhani',
+                                color: SolarisColors.cyan,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 2.0,
                               ),
                             ),
-                            const SizedBox(width: SolarisSpacing.xs),
                             Text(
-                              secondsStr,
+                              stardate,
                               style: const TextStyle(
                                 fontFamily: 'JetBrainsMono',
-                                color: SolarisColors.cyan,
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
+                                color: SolarisColors.textMuted,
+                                fontSize: 9,
+                                letterSpacing: 1.2,
                               ),
                             ),
                           ],
-                        ),
-                        Text(
-                          dateStr.toUpperCase(),
-                          style: const TextStyle(
-                            fontFamily: 'Rajdhani',
-                            color: SolarisColors.cyan,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 2.0,
-                          ),
-                        ),
-                        Text(
-                          stardate,
-                          style: const TextStyle(
-                            fontFamily: 'JetBrainsMono',
-                            color: SolarisColors.textMuted,
-                            fontSize: 9,
-                            letterSpacing: 1.2,
-                          ),
-                        ),
-                      ],
+                        );
+                      },
                     ),
                   ),
 
-                  // RIGHT: STAR TRACKER / NAVIGATION VIEWPORT
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SolarisNavViewportWidget(
-                        isExpanded: _isTelemetryExpanded,
-                        heading: _compassHeading,
-                        cardinal: _compassCardinal,
-                        onTap: () {
-                          setState(() {
-                            _isTelemetryExpanded = !_isTelemetryExpanded;
-                          });
+                  // RIGHT: STAR TRACKER / NAVIGATION VIEWPORT (ISOLATED COMPASS VALUE NOTIFIER)
+                  ValueListenableBuilder<double>(
+                    valueListenable: _compassHeadingNotifier,
+                    builder: (context, heading, _) {
+                      return ValueListenableBuilder<String>(
+                        valueListenable: _compassCardinalNotifier,
+                        builder: (context, cardinal, _) {
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SolarisNavViewportWidget(
+                                isExpanded: _isTelemetryExpanded,
+                                heading: heading,
+                                cardinal: cardinal,
+                                onTap: () {
+                                  setState(() {
+                                    _isTelemetryExpanded = !_isTelemetryExpanded;
+                                  });
+                                },
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _isTelemetryExpanded
+                                    ? 'COLLAPSE'
+                                    : '${heading.toInt().toString().padLeft(3, '0')}° $cardinal // NAV COMPASS',
+                                style: TextStyle(
+                                  fontFamily: 'JetBrainsMono',
+                                  color: _isTelemetryExpanded
+                                      ? SolarisColors.cyan
+                                      : SolarisColors.textMuted,
+                                  fontSize: 8,
+                                  letterSpacing: 0.8,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          );
                         },
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        _isTelemetryExpanded
-                            ? 'COLLAPSE'
-                            : '${_compassHeading.toInt().toString().padLeft(3, '0')}° $_compassCardinal // NAV COMPASS',
-                        style: TextStyle(
-                          fontFamily: 'JetBrainsMono',
-                          color: _isTelemetryExpanded
-                              ? SolarisColors.cyan
-                              : SolarisColors.textMuted,
-                          fontSize: 8,
-                          letterSpacing: 0.8,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
+                      );
+                    },
                   ),
                 ],
               ),
