@@ -1,0 +1,45 @@
+# ==============================================================================
+# Lunaris OS — Git Ignore Rules
+# ==============================================================================
+
+# Python cache & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary & system files
+*.log
+*.swp
+.DS_Store
+Thumbs.db
+
+# IntelliJ & IDE files
+*.iml
+*.ipr
+*.iws
+.idea/
+.vscode/
+
+# Flutter & Dart build artifacts
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+**/build/
+**/coverage/
+.widget_preview/
+
+# Android specific artifacts & local configuration
+**/android/local.properties
+**/.gradle/
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
+*.apk
+*.aab
+
+# Root-level loose screenshots (curated screenshots live in screenshots/)
+screen_*.png
+!screenshots/*.png

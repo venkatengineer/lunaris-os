@@ -1,0 +1,37 @@
+name: aetheris_control
+description: "Aetheris OS Mobile Control & Launcher for Vivo V40"
+publish_to: 'none'
+version: 2.8.7+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/icons/
+    - assets/wallpapers/
+
+  fonts:
+    - family: Orbitron
+      fonts:
+        - asset: assets/fonts/Orbitron.ttf
+    - family: Rajdhani
+      fonts:
+        - asset: assets/fonts/Rajdhani-Bold.ttf
+          weight: 700
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Bold.ttf
+          weight: 700
