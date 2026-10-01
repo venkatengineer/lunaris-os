@@ -49,10 +49,10 @@ echo -e "\n${YELLOW}[2/4] Fetching dependencies in ${APP_DIR}...${NC}"
 cd "${APP_DIR}"
 flutter pub get
 
-echo -e "\n${YELLOW}[3/4] Compiling Lunaris OS Android Launcher APK...${NC}"
-flutter build apk --debug
+echo -e "\n${YELLOW}[3/4] Compiling Lunaris OS Android Launcher Release APK (AOT Native 120 FPS)...${NC}"
+flutter build apk --release
 
-APK_PATH="${APP_DIR}/build/app/outputs/flutter-apk/app-debug.apk"
+APK_PATH="${APP_DIR}/build/app/outputs/flutter-apk/app-release.apk"
 if [ ! -f "$APK_PATH" ]; then
     echo -e "${RED}[ERROR] Build failed: APK file not found at ${APK_PATH}${NC}"
     exit 1

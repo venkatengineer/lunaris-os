@@ -207,11 +207,11 @@ cd lunaris-os/aetheris_control
 # 2. Fetch packages
 flutter pub get
 
-# 3. Build APK
-flutter build apk --debug
+# 3. Build APK (Release mode with native AOT compilation for 120 FPS)
+flutter build apk --release
 
 # 4. Install onto your connected device
-adb install -r -d -t build/app/outputs/flutter-apk/app-debug.apk
+adb install -r -d -t build/app/outputs/flutter-apk/app-release.apk
 
 # 5. Launch the launcher activity
 adb shell am start -n com.aetheris.aetheris_control/.MainActivity
