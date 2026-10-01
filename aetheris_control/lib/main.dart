@@ -1395,10 +1395,11 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
       duration: const Duration(milliseconds: 400),
     );
 
-    // Spaceship Matrix Transition Controller (250ms snappy high-tech unroll)
+    // Spaceship Matrix Transition Controller (Snappy 220ms unroll, instantaneous 150ms snap exit)
     _matrixAnimController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 250),
+      duration: const Duration(milliseconds: 220),
+      reverseDuration: const Duration(milliseconds: 150),
     );
 
     // 1-second clock with isolated notifier (no root setState)
@@ -1666,10 +1667,24 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
     final bottomSafe = media.padding.bottom;
 
     return PopScope(
-      canPop: !_isMatrixOpen,
+      canPop: false,
       onPopInvokedWithResult: (didPop, result) {
-        if (!didPop && _isMatrixOpen) {
+        if (didPop) return;
+        if (_isMatrixOpen) {
           _closeApplicationMatrix();
+        } else if (_isCapsuleExpanded) {
+          HapticFeedback.lightImpact();
+          setState(() => _isCapsuleExpanded = false);
+        } else if (_isTelemetryExpanded) {
+          HapticFeedback.lightImpact();
+          setState(() => _isTelemetryExpanded = false);
+        } else if (_pageController.hasClients && (_pageController.page ?? 0) >= 0.5) {
+          HapticFeedback.lightImpact();
+          _pageController.animateToPage(
+            0,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+          );
         }
       },
       child: Scaffold(
@@ -1693,8 +1708,12 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
               animation: _matrixAnimController,
               builder: (context, child) {
                 final t = _matrixAnimController.value;
-                final scale = 1.0 - (0.07 * t);
-                final opacity = 1.0 - (0.75 * t);
+                final isClosing = _matrixAnimController.status == AnimationStatus.reverse;
+                final curvedT = isClosing
+                    ? Curves.easeInCubic.transform(t)
+                    : Curves.easeOutCubic.transform(t);
+                final scale = 1.0 - (0.07 * curvedT);
+                final opacity = 1.0 - (0.75 * curvedT);
                 return Transform.scale(
                   scale: scale,
                   child: Opacity(
@@ -1749,7 +1768,10 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
                   ),
                   builder: (context, modalChild) {
                     final t = _matrixAnimController.value;
-                    final curvedT = Curves.easeOutCubic.transform(t);
+                    final isClosing = _matrixAnimController.status == AnimationStatus.reverse;
+                    final curvedT = isClosing
+                        ? Curves.easeInCubic.transform(t)
+                        : Curves.easeOutCubic.transform(t);
                     final slideY = (1.0 - curvedT) * (media.size.height * 0.40);
                     final scale = 0.96 + (0.04 * curvedT);
 
@@ -3684,14 +3706,14 @@ class _SolarisMatrixDrawerModalState extends State<_SolarisMatrixDrawerModal> {
 
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
-        if (notification is OverscrollNotification && notification.overscroll < -18) {
+        if (notification is OverscrollNotification && notification.overscroll < -4) {
           widget.onClose();
           return true;
         }
         if (notification is ScrollUpdateNotification &&
             notification.metrics.pixels <= 0 &&
             notification.scrollDelta != null &&
-            notification.scrollDelta! < -22) {
+            notification.scrollDelta! < -4) {
           widget.onClose();
           return true;
         }
@@ -3716,8 +3738,13 @@ class _SolarisMatrixDrawerModalState extends State<_SolarisMatrixDrawerModal> {
             // Top Grip Handle with swipe-down dismissal
             GestureDetector(
               behavior: HitTestBehavior.opaque,
+              onVerticalDragUpdate: (d) {
+                if (d.delta.dy > 6) {
+                  widget.onClose();
+                }
+              },
               onVerticalDragEnd: (d) {
-                if (d.primaryVelocity != null && d.primaryVelocity! > 180) {
+                if ((d.primaryVelocity ?? 0) > 60) {
                   widget.onClose();
                 }
               },
@@ -3745,8 +3772,13 @@ class _SolarisMatrixDrawerModalState extends State<_SolarisMatrixDrawerModal> {
             // MATRIX HEADER & REPOSITORY STATUS (SWIPE DOWN DISMISSAL AS WELL)
             GestureDetector(
               behavior: HitTestBehavior.translucent,
+              onVerticalDragUpdate: (d) {
+                if (d.delta.dy > 6) {
+                  widget.onClose();
+                }
+              },
               onVerticalDragEnd: (d) {
-                if (d.primaryVelocity != null && d.primaryVelocity! > 180) {
+                if ((d.primaryVelocity ?? 0) > 60) {
                   widget.onClose();
                 }
               },
