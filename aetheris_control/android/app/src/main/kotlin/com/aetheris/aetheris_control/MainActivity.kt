@@ -142,7 +142,7 @@ class MainActivity : FlutterActivity() {
                         }
                         if (intent != null) {
                             try {
-                                val opts = ActivityOptions.makeClipRevealAnimation(
+                                val opts = ActivityOptions.makeScaleUpAnimation(
                                     window.decorView,
                                     startX - (startW / 2),
                                     startY - (startH / 2),

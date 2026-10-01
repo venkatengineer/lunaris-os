@@ -486,12 +486,11 @@ class _SolarisAppIconState extends State<SolarisAppIcon> {
 
   @override
   Widget build(BuildContext context) {
-    final hasValidFile = _iconPath != null &&
-        _iconPath!.isNotEmpty &&
-        File(_iconPath!).existsSync();
+    final hasValidFile = _iconPath != null && _iconPath!.isNotEmpty;
 
     final radius = widget.size * 0.22;
     if (hasValidFile) {
+      final pixelSize = (widget.size * MediaQuery.of(context).devicePixelRatio).round().clamp(64, 256);
       return Container(
         width: widget.size,
         height: widget.size,
@@ -512,8 +511,10 @@ class _SolarisAppIconState extends State<SolarisAppIcon> {
             File(_iconPath!),
             width: widget.size,
             height: widget.size,
+            cacheWidth: pixelSize,
+            cacheHeight: pixelSize,
             fit: BoxFit.cover,
-            filterQuality: FilterQuality.high,
+            filterQuality: FilterQuality.medium,
             errorBuilder: (_, __, ___) => _buildFallback(),
           ),
         ),
@@ -1393,10 +1394,10 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
       duration: const Duration(milliseconds: 400),
     );
 
-    // Spaceship Matrix Transition Controller (380ms high-tech unroll)
+    // Spaceship Matrix Transition Controller (250ms snappy high-tech unroll)
     _matrixAnimController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 380),
+      duration: const Duration(milliseconds: 250),
     );
 
     // 1-second clock
@@ -1582,7 +1583,7 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
       globalPos.dy + boxSize.height / 2,
     );
 
-    // Launch immediately via Android native clip reveal animation for instantaneous zero-lag response
+    // Launch immediately via Android native hardware-accelerated scale-up animation
     platform.invokeMethod('launchApp', {
       'package': packageName,
       'activity': activityName,
@@ -1592,36 +1593,44 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
       'height': boxSize.height.toInt(),
     }).catchError((_) {});
 
-    // Trigger subtle non-blocking target lock reticle on the icon
-    setState(() {
-      _activeLaunch = LaunchData(
-        title: systemTitle,
-        packageName: packageName,
-        activityName: activityName,
-        origin: centerOrigin,
-        size: boxSize,
-        iconPath: iconPath ?? _packageIconMap[packageName],
-      );
-    });
+    // If matrix drawer was open, close it instantly so zero background animations fight the OS
+    if (_isMatrixOpen) {
+      _matrixAnimController.value = 0.0;
+      setState(() => _isMatrixOpen = false);
+    } else {
+      // Trigger subtle non-blocking target lock reticle on the homescreen icon
+      setState(() {
+        _activeLaunch = LaunchData(
+          title: systemTitle,
+          packageName: packageName,
+          activityName: activityName,
+          origin: centerOrigin,
+          size: boxSize,
+          iconPath: iconPath ?? _packageIconMap[packageName],
+        );
+      });
 
-    _launchAnimController.forward(from: 0.0);
+      _launchAnimController.forward(from: 0.0);
 
-    // Reset overlay after 260ms
-    Future.delayed(const Duration(milliseconds: 260), () {
-      if (mounted) {
-        setState(() => _activeLaunch = null);
-      }
-    });
+      // Reset overlay after 260ms
+      Future.delayed(const Duration(milliseconds: 260), () {
+        if (mounted) {
+          setState(() => _activeLaunch = null);
+        }
+      });
+    }
   }
 
   void _openApplicationMatrix() {
-    HapticFeedback.heavyImpact();
+    if (_isMatrixOpen || _matrixAnimController.isAnimating) return;
+    HapticFeedback.mediumImpact();
     platform.invokeMethod('playSciFiSound', {'sound': 'drawer_open'}).catchError((_) {});
     setState(() => _isMatrixOpen = true);
     _matrixAnimController.forward(from: 0.0);
   }
 
   void _closeApplicationMatrix() {
+    if (!_isMatrixOpen) return;
     HapticFeedback.lightImpact();
     platform.invokeMethod('playSciFiSound', {'sound': 'drawer_close'}).catchError((_) {});
     _matrixAnimController.reverse().then((_) {
@@ -1708,19 +1717,39 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
               Positioned.fill(
                 child: AnimatedBuilder(
                   animation: _matrixAnimController,
-                  builder: (context, _) {
+                  child: _SolarisMatrixDrawerModal(
+                    installedApps: _installedApps,
+                    packageIconMap: _packageIconMap,
+                    telemetry: _telemetry,
+                    classifyApp: _classifyApp,
+                    onClose: _closeApplicationMatrix,
+                    onLaunchApp: (appContext, title, pkg, cls, iconPath) {
+                      _launchAppWithAnimation(
+                        iconContext: appContext,
+                        systemTitle: title,
+                        packageName: pkg,
+                        activityName: cls,
+                        iconPath: iconPath,
+                      );
+                    },
+                  ),
+                  builder: (context, modalChild) {
                     final t = _matrixAnimController.value;
                     final curvedT = Curves.easeOutCubic.transform(t);
-                    final slideY = (1.0 - curvedT) * 120.0;
-                    final scale = 0.93 + (0.07 * curvedT);
+                    final slideY = (1.0 - curvedT) * (media.size.height * 0.40);
+                    final scale = 0.96 + (0.04 * curvedT);
 
                     return Stack(
                       children: [
                         // Holographic Backdrop Barrier
                         Positioned.fill(
-                          child: Opacity(
-                            opacity: (curvedT * 0.92).clamp(0.0, 0.95),
-                            child: Container(color: SolarisColors.spaceBlack),
+                          child: GestureDetector(
+                            onTap: _closeApplicationMatrix,
+                            behavior: HitTestBehavior.opaque,
+                            child: Opacity(
+                              opacity: (curvedT * 0.92).clamp(0.0, 0.95),
+                              child: Container(color: SolarisColors.spaceBlack),
+                            ),
                           ),
                         ),
 
@@ -1740,23 +1769,7 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
                               scale: scale,
                               child: Opacity(
                                 opacity: curvedT.clamp(0.0, 1.0),
-                                child: _SolarisMatrixDrawerModal(
-                                  installedApps: _installedApps,
-                                  packageIconMap: _packageIconMap,
-                                  telemetry: _telemetry,
-                                  classifyApp: _classifyApp,
-                                  onClose: _closeApplicationMatrix,
-                                  onLaunchApp: (appContext, title, pkg, cls, iconPath) {
-                                    _closeApplicationMatrix();
-                                    _launchAppWithAnimation(
-                                      iconContext: appContext,
-                                      systemTitle: title,
-                                      packageName: pkg,
-                                      activityName: cls,
-                                      iconPath: iconPath,
-                                    );
-                                  },
-                                ),
+                                child: modalChild,
                               ),
                             ),
                           ),
@@ -1863,21 +1876,9 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
     final batVal = _telemetry['batteryLevel'] ?? 70;
     final currentMission = _missions[_missionIdx];
 
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onVerticalDragUpdate: (details) {
-        if (details.delta.dy < -6 && !_isMatrixOpen) {
-          _openApplicationMatrix();
-        }
-      },
-      onVerticalDragEnd: (details) {
-        if (details.primaryVelocity != null && details.primaryVelocity! < -80 && !_isMatrixOpen) {
-          _openApplicationMatrix();
-        }
-      },
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: SolarisSpacing.lg),
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: SolarisSpacing.lg),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2094,8 +2095,7 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
             ],
           ),
         ),
-      ),
-    );
+      );
   }
 
   // ===========================================================================
@@ -3437,6 +3437,26 @@ class _SolarisHomeScreenState extends State<SolarisHomeScreen>
 // =============================================================================
 // SOLARIS MATRIX DRAWER MODAL WIDGET (STATEFUL MODAL COMPONENT)
 // =============================================================================
+class _AlphabetScrubData {
+  final String letter;
+  final String appName;
+  final double y;
+
+  const _AlphabetScrubData({
+    required this.letter,
+    required this.appName,
+    required this.y,
+  });
+}
+
+String _getAppLetterKey(String? rawName) {
+  if (rawName == null) return '#';
+  final trimmed = rawName.trim().toUpperCase();
+  if (trimmed.isEmpty) return '#';
+  final first = trimmed[0];
+  return (first.codeUnitAt(0) >= 65 && first.codeUnitAt(0) <= 90) ? first : '#';
+}
+
 class _SolarisMatrixDrawerModal extends StatefulWidget {
   final List<Map<String, dynamic>> installedApps;
   final Map<String, String> packageIconMap;
@@ -3466,596 +3486,745 @@ class _SolarisMatrixDrawerModalState extends State<_SolarisMatrixDrawerModal> {
 
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final ValueNotifier<_AlphabetScrubData?> _scrubNotifier = ValueNotifier(null);
+  final ValueNotifier<String?> _activeRailLetterNotifier = ValueNotifier(null);
+
   String _selectedCategory = 'ALL';
   String _searchQuery = '';
-
-  String? _activeLetter;
-  String _previewAppName = '';
-  bool _isScrubbingAlphabet = false;
-  double _scrubBubbleY = 120.0;
-
   final List<String> _categories = ['ALL', 'SYS', 'COM', 'NET', 'MEDIA', 'ENG'];
+
+  List<Map<String, dynamic>> _allSortedApps = [];
+  final Map<String, List<Map<String, dynamic>>> _categoryApps = {};
+  final Map<String, int> _categoryCounts = {};
+  List<Map<String, dynamic>> _filteredApps = [];
+  final Map<String, int> _letterToIndex = {};
+
+  Timer? _scrubHideTimer;
+  int _lastSoundTimeMs = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _initData();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SolarisMatrixDrawerModal oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.installedApps != widget.installedApps) {
+      _initData();
+      setState(() {});
+    }
+  }
 
   @override
   void dispose() {
+    _scrubHideTimer?.cancel();
     _searchController.dispose();
     _scrollController.dispose();
+    _scrubNotifier.dispose();
+    _activeRailLetterNotifier.dispose();
     super.dispose();
   }
 
-  List<Map<String, dynamic>> _getFilteredApps() {
-    final list = widget.installedApps.where((app) {
-      final name = (app['name'] as String).toLowerCase();
-      final pkg = (app['package'] as String).toLowerCase();
-      final matchesSearch = _searchQuery.isEmpty ||
-          name.contains(_searchQuery.toLowerCase()) ||
-          pkg.contains(_searchQuery.toLowerCase());
-
-      if (!matchesSearch) return false;
-
-      if (_selectedCategory == 'ALL') return true;
-      final cat = widget.classifyApp(pkg, name);
-      return cat == _selectedCategory;
-    }).toList();
-
-    // Sort alphabetically A-Z
-    list.sort((a, b) {
-      final nameA = (a['name'] as String).toUpperCase();
-      final nameB = (b['name'] as String).toUpperCase();
+  void _initData() {
+    _allSortedApps = List<Map<String, dynamic>>.from(widget.installedApps);
+    _allSortedApps.sort((a, b) {
+      final nameA = (a['name'] as String? ?? '').trim().toUpperCase();
+      final nameB = (b['name'] as String? ?? '').trim().toUpperCase();
       return nameA.compareTo(nameB);
     });
 
-    return list;
+    _categoryApps.clear();
+    _categoryCounts.clear();
+    _categoryApps['ALL'] = _allSortedApps;
+    _categoryCounts['ALL'] = _allSortedApps.length;
+
+    for (final cat in _categories) {
+      if (cat == 'ALL') continue;
+      final filtered = _allSortedApps.where((app) {
+        final name = (app['name'] as String? ?? '').toLowerCase();
+        final pkg = (app['package'] as String? ?? '').toLowerCase();
+        return widget.classifyApp(pkg, name) == cat;
+      }).toList();
+      _categoryApps[cat] = filtered;
+      _categoryCounts[cat] = filtered.length;
+    }
+
+    _recomputeFilteredApps();
   }
 
-  int _countForCategory(String cat) {
-    if (cat == 'ALL') return widget.installedApps.length;
-    return widget.installedApps.where((app) {
-      final name = (app['name'] as String).toLowerCase();
-      final pkg = (app['package'] as String).toLowerCase();
-      return widget.classifyApp(pkg, name) == cat;
-    }).length;
+  void _recomputeFilteredApps() {
+    final base = _categoryApps[_selectedCategory] ?? _allSortedApps;
+    if (_searchQuery.trim().isEmpty) {
+      _filteredApps = base;
+    } else {
+      final q = _searchQuery.trim().toLowerCase();
+      _filteredApps = base.where((app) {
+        final name = (app['name'] as String? ?? '').toLowerCase();
+        final pkg = (app['package'] as String? ?? '').toLowerCase();
+        return name.contains(q) || pkg.contains(q);
+      }).toList();
+    }
+    _recomputeLetterIndices();
+  }
+
+  void _recomputeLetterIndices() {
+    _letterToIndex.clear();
+    for (int i = 0; i < _filteredApps.length; i++) {
+      final key = _getAppLetterKey(_filteredApps[i]['name'] as String?);
+      if (!_letterToIndex.containsKey(key)) {
+        _letterToIndex[key] = i;
+      }
+    }
+
+    int? nextTarget;
+    for (int i = _alphabet.length - 1; i >= 0; i--) {
+      final l = _alphabet[i];
+      if (_letterToIndex.containsKey(l)) {
+        nextTarget = _letterToIndex[l];
+      } else if (nextTarget != null) {
+        _letterToIndex[l] = nextTarget;
+      }
+    }
   }
 
   void _handleAlphabetTouch({
     required double localY,
     required double railHeight,
-    required List<Map<String, dynamic>> filtered,
     required double availableHeight,
     required double rowHeight,
   }) {
-    if (railHeight <= 0 || filtered.isEmpty) return;
+    if (railHeight <= 0 || _filteredApps.isEmpty) return;
     final letterHeight = railHeight / _alphabet.length;
     final int idx = (localY / letterHeight).floor().clamp(0, _alphabet.length - 1);
     final String letter = _alphabet[idx];
 
-    // Find the first app matching this letter
-    int targetIdx = -1;
-    String previewName = '';
-    for (int i = 0; i < filtered.length; i++) {
-      final name = (filtered[i]['name'] as String).trim().toUpperCase();
-      if (name.isEmpty) continue;
-      final first = name[0];
-      final key = RegExp(r'[A-Z]').hasMatch(first) ? first : '#';
-      if (key == letter) {
-        targetIdx = i;
-        previewName = filtered[i]['name'] as String;
-        break;
-      }
-    }
+    final targetIdx = _letterToIndex[letter] ?? -1;
+    final appName = (targetIdx != -1 && targetIdx < _filteredApps.length)
+        ? (_filteredApps[targetIdx]['name'] as String? ?? '')
+        : '';
 
-    // If no app starts with this exact letter, find the nearest next letter
-    if (targetIdx == -1) {
-      final letterOrder = _alphabet.indexOf(letter);
-      for (int a = letterOrder + 1; a < _alphabet.length; a++) {
-        final nextLetter = _alphabet[a];
-        for (int i = 0; i < filtered.length; i++) {
-          final name = (filtered[i]['name'] as String).trim().toUpperCase();
-          if (name.isEmpty) continue;
-          final first = name[0];
-          final key = RegExp(r'[A-Z]').hasMatch(first) ? first : '#';
-          if (key == nextLetter) {
-            targetIdx = i;
-            previewName = filtered[i]['name'] as String;
-            break;
-          }
-        }
-        if (targetIdx != -1) break;
-      }
-    }
-
-    if (_activeLetter != letter) {
-      _activeLetter = letter;
-      _SolarisHomeScreenState.platform.invokeMethod('playSciFiSound', {'sound': 'alphabet_tick'}).catchError((_) {});
+    if (_activeRailLetterNotifier.value != letter) {
+      _activeRailLetterNotifier.value = letter;
       HapticFeedback.selectionClick();
+
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastSoundTimeMs > 65) {
+        _lastSoundTimeMs = now;
+        _SolarisHomeScreenState.platform
+            .invokeMethod('playSciFiSound', {'sound': 'alphabet_tick'})
+            .catchError((_) {});
+      }
     }
 
-    setState(() {
-      _isScrubbingAlphabet = true;
-      _scrubBubbleY = localY;
-      _previewAppName = previewName;
-    });
+    _scrubHideTimer?.cancel();
+    _scrubNotifier.value = _AlphabetScrubData(
+      letter: letter,
+      appName: appName,
+      y: localY,
+    );
 
     if (targetIdx != -1 && _scrollController.hasClients) {
       final int row = targetIdx ~/ 4;
-      const double gridPaddingTop = SolarisSpacing.xs; // 4.0
+      const double gridPaddingTop = SolarisSpacing.xs;
       final double rowTop = gridPaddingTop + (row * rowHeight);
-      // Center the target row directly in the middle of the viewport
-      final double targetOffset = (rowTop + (rowHeight / 2.0) - (availableHeight / 2.0))
+
+      // Center the target row at ~35% of the viewport (eye level in upper-middle)
+      final double targetOffset = (rowTop - (availableHeight * 0.35))
           .clamp(0.0, _scrollController.position.maxScrollExtent);
+
       _scrollController.jumpTo(targetOffset);
     }
   }
 
   void _finishAlphabetTouch() {
-    Future.delayed(const Duration(milliseconds: 800), () {
+    _scrubHideTimer?.cancel();
+    _scrubHideTimer = Timer(const Duration(milliseconds: 650), () {
       if (mounted) {
-        setState(() {
-          _isScrubbingAlphabet = false;
-        });
+        _scrubNotifier.value = null;
+        _activeRailLetterNotifier.value = null;
       }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _getFilteredApps();
     final media = MediaQuery.of(context);
     final topSafe = media.padding.top;
 
-    return Container(
-      margin: EdgeInsets.only(top: topSafe + 8),
-      decoration: BoxDecoration(
-        color: const Color(0xF2070D18),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        border: Border.all(color: SolarisColors.cyan.withOpacity(0.50), width: 1.2),
-        boxShadow: [
-          BoxShadow(
-            color: SolarisColors.cyan.withOpacity(0.18),
-            blurRadius: 28,
-            offset: const Offset(0, -6),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          // Top Grip Handle with swipe-down dismissal
-          GestureDetector(
-            onVerticalDragEnd: (d) {
-              if (d.primaryVelocity != null && d.primaryVelocity! > 200) {
-                widget.onClose();
-              }
-            },
-            behavior: HitTestBehavior.opaque,
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              alignment: Alignment.center,
-              child: Container(
-                width: 42,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: SolarisColors.cyan.withOpacity(0.6),
-                  borderRadius: BorderRadius.circular(2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: SolarisColors.cyan.withOpacity(0.4),
-                      blurRadius: 6,
-                    ),
-                  ],
-                ),
-              ),
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        if (notification is OverscrollNotification && notification.overscroll < -18) {
+          widget.onClose();
+          return true;
+        }
+        if (notification is ScrollUpdateNotification &&
+            notification.metrics.pixels <= 0 &&
+            notification.scrollDelta != null &&
+            notification.scrollDelta! < -22) {
+          widget.onClose();
+          return true;
+        }
+        return false;
+      },
+      child: Container(
+        margin: EdgeInsets.only(top: topSafe + 8),
+        decoration: BoxDecoration(
+          color: const Color(0xF2070D18),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border.all(color: SolarisColors.cyan.withOpacity(0.50), width: 1.2),
+          boxShadow: [
+            BoxShadow(
+              color: SolarisColors.cyan.withOpacity(0.18),
+              blurRadius: 28,
+              offset: const Offset(0, -6),
             ),
-          ),
-
-          // MATRIX HEADER & REPOSITORY STATUS
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: SolarisSpacing.lg),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: const [
-                        Text('◈', style: TextStyle(color: SolarisColors.cyan, fontSize: 13, fontWeight: FontWeight.bold)),
-                        SizedBox(width: 6),
-                        Text(
-                          'SOLARIS // APPLICATION MATRIX',
-                          style: TextStyle(
-                            fontFamily: 'Orbitron',
-                            color: SolarisColors.textPrimary,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                    Text(
-                      'SYSTEMS INDEXED: ${widget.installedApps.length} // ALL REPOSITORIES ONLINE',
-                      style: const TextStyle(
-                        fontFamily: 'JetBrainsMono',
-                        color: SolarisColors.textMuted,
-                        fontSize: 9,
-                        letterSpacing: 1.0,
-                      ),
-                    ),
-                  ],
-                ),
-                GestureDetector(
-                  onTap: widget.onClose,
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: SolarisColors.cardBg,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: SolarisColors.cyan.withOpacity(0.6), width: 0.8),
-                    ),
-                    child: const Icon(Icons.close, size: 14, color: SolarisColors.cyan),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: SolarisSpacing.sm),
-
-          // HOLOGRAPHIC SEARCH BAR (CHAMFERED FRAME)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: SolarisSpacing.lg),
-            child: Container(
-              decoration: BoxDecoration(
-                color: SolarisColors.cardBg,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: SolarisColors.borderBright, width: 0.8),
-              ),
-              child: TextField(
-                controller: _searchController,
-                onChanged: (val) {
-                  setState(() => _searchQuery = val);
-                },
-                style: const TextStyle(
-                  fontFamily: 'JetBrainsMono',
-                  color: SolarisColors.textPrimary,
-                  fontSize: 13,
-                ),
-                decoration: InputDecoration(
-                  hintText: '⬡ SEARCH COMMAND MATRIX REPOSITORY...',
-                  hintStyle: const TextStyle(
-                    fontFamily: 'Rajdhani',
-                    color: SolarisColors.textMuted,
-                    fontSize: 13,
-                    letterSpacing: 1.0,
-                  ),
-                  prefixIcon: const Icon(Icons.search, color: SolarisColors.cyan, size: 18),
-                  suffixIcon: _searchQuery.isNotEmpty
-                      ? GestureDetector(
-                          onTap: () {
-                            _searchController.clear();
-                            setState(() => _searchQuery = '');
-                          },
-                          child: const Icon(Icons.clear, color: SolarisColors.cyan, size: 16),
-                        )
-                      : null,
-                  border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                ),
-              ),
-            ),
-          ),
-
-          const SizedBox(height: SolarisSpacing.xs),
-
-          // SUBSYSTEM CATEGORY FILTER TABS
-          SizedBox(
-            height: 30,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: SolarisSpacing.lg),
-              itemCount: _categories.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 6),
-              itemBuilder: (context, idx) {
-                final cat = _categories[idx];
-                final count = _countForCategory(cat);
-                final isSelected = _selectedCategory == cat;
-
-                return GestureDetector(
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    setState(() => _selectedCategory = cat);
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: isSelected ? SolarisColors.cyan.withOpacity(0.18) : SolarisColors.cardBg,
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(
-                        color: isSelected ? SolarisColors.cyan : SolarisColors.borderMuted,
-                        width: isSelected ? 1.2 : 0.6,
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          cat,
-                          style: TextStyle(
-                            fontFamily: 'Orbitron',
-                            color: isSelected ? SolarisColors.cyan : SolarisColors.textSecondary,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '[$count]',
-                          style: TextStyle(
-                            fontFamily: 'JetBrainsMono',
-                            color: isSelected ? SolarisColors.cyan : SolarisColors.textMuted,
-                            fontSize: 8,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
+          ],
+        ),
+        child: Column(
+          children: [
+            // Top Grip Handle with swipe-down dismissal
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragEnd: (d) {
+                if (d.primaryVelocity != null && d.primaryVelocity! > 180) {
+                  widget.onClose();
+                }
               },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                alignment: Alignment.center,
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: SolarisColors.cyan.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: SolarisColors.cyan.withOpacity(0.4),
+                        blurRadius: 6,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ),
 
-          const SizedBox(height: SolarisSpacing.xs),
-
-          // 4-COLUMN RESPONSIVE APP MATRIX GRID WITH VIVO-STYLE ALPHABET SCROLLBAR
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final availableHeight = constraints.maxHeight;
-                final availableWidth = constraints.maxWidth;
-                final gridWidth = (availableWidth - 30);
-                final contentWidth = gridWidth - (SolarisSpacing.md + 4);
-                final itemWidth = (contentWidth - 24) / 4.0;
-                final itemHeight = itemWidth / 0.76;
-                final rowHeight = itemHeight + 10.0;
-
-                return Stack(
+            // MATRIX HEADER & REPOSITORY STATUS (SWIPE DOWN DISMISSAL AS WELL)
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onVerticalDragEnd: (d) {
+                if (d.primaryVelocity != null && d.primaryVelocity! > 180) {
+                  widget.onClose();
+                }
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: SolarisSpacing.lg),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Main Grid
-                        Expanded(
-                          child: filtered.isEmpty
-                              ? Center(
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: const [
-                                      Icon(Icons.radar, color: SolarisColors.cyan, size: 36),
-                                      SizedBox(height: 10),
-                                      Text(
-                                        'ZERO TARGETS DETECTED IN SECTOR',
-                                        style: TextStyle(
-                                          fontFamily: 'JetBrainsMono',
-                                          color: SolarisColors.textMuted,
-                                          fontSize: 11,
-                                          letterSpacing: 1.2,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                              : GridView.builder(
-                                  controller: _scrollController,
-                                  physics: const BouncingScrollPhysics(),
-                                  padding: const EdgeInsets.only(
-                                    left: SolarisSpacing.md,
-                                    right: 4,
-                                    top: SolarisSpacing.xs,
-                                    bottom: SolarisSpacing.xl,
-                                  ),
-                                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 4,
-                                    childAspectRatio: 0.76,
-                                    crossAxisSpacing: 8,
-                                    mainAxisSpacing: 10,
-                                  ),
-                                  itemCount: filtered.length,
-                                  itemBuilder: (cellContext, idx) {
-                                    final app = filtered[idx];
-                                    final name = app['name'] as String;
-                                    final pkg = app['package'] as String;
-                                    final cls = app['class'] as String?;
-                                    final iconPath = app['iconPath'] as String?;
-                                    final catTag = widget.classifyApp(pkg, name);
+                        Row(
+                          children: const [
+                            Text('◈', style: TextStyle(color: SolarisColors.cyan, fontSize: 13, fontWeight: FontWeight.bold)),
+                            SizedBox(width: 6),
+                            Text(
+                              'SOLARIS // APPLICATION MATRIX',
+                              style: TextStyle(
+                                fontFamily: 'Orbitron',
+                                color: SolarisColors.textPrimary,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          'SYSTEMS INDEXED: ${widget.installedApps.length} // ALL REPOSITORIES ONLINE',
+                          style: const TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            color: SolarisColors.textMuted,
+                            fontSize: 9,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ],
+                    ),
+                    GestureDetector(
+                      onTap: widget.onClose,
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: SolarisColors.cardBg,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: SolarisColors.cyan.withOpacity(0.6), width: 0.8),
+                        ),
+                        child: const Icon(Icons.close, size: 14, color: SolarisColors.cyan),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
-                                    return Builder(
-                                      builder: (itemContext) {
-                                        return SolarisPressable(
-                                          pressedScale: 0.88,
-                                          onTap: () {
-                                            widget.onLaunchApp(itemContext, name, pkg, cls, iconPath);
-                                          },
-                                          child: Container(
-                                            decoration: BoxDecoration(
-                                              color: SolarisColors.cardBg,
-                                              borderRadius: BorderRadius.circular(8),
-                                              border: Border.all(color: SolarisColors.borderMuted, width: 0.6),
-                                            ),
-                                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                                            child: Column(
-                                              mainAxisAlignment: MainAxisAlignment.center,
-                                              children: [
-                                                SolarisAppIcon(
-                                                  packageName: pkg,
-                                                  directIconPath: iconPath,
-                                                  size: 46,
-                                                  fallbackLetter: name,
+            const SizedBox(height: SolarisSpacing.sm),
+
+            // HOLOGRAPHIC SEARCH BAR (CHAMFERED FRAME)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: SolarisSpacing.lg),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: SolarisColors.cardBg,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: SolarisColors.borderBright, width: 0.8),
+                ),
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (val) {
+                    setState(() {
+                      _searchQuery = val;
+                      _recomputeFilteredApps();
+                    });
+                    if (_scrollController.hasClients) {
+                      _scrollController.jumpTo(0.0);
+                    }
+                  },
+                  style: const TextStyle(
+                    fontFamily: 'JetBrainsMono',
+                    color: SolarisColors.textPrimary,
+                    fontSize: 13,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: '⬡ SEARCH COMMAND MATRIX REPOSITORY...',
+                    hintStyle: const TextStyle(
+                      fontFamily: 'Rajdhani',
+                      color: SolarisColors.textMuted,
+                      fontSize: 13,
+                      letterSpacing: 1.0,
+                    ),
+                    prefixIcon: const Icon(Icons.search, color: SolarisColors.cyan, size: 18),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? GestureDetector(
+                            onTap: () {
+                              _searchController.clear();
+                              setState(() {
+                                _searchQuery = '';
+                                _recomputeFilteredApps();
+                              });
+                            },
+                            child: const Icon(Icons.clear, color: SolarisColors.cyan, size: 16),
+                          )
+                        : null,
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: SolarisSpacing.xs),
+
+            // SUBSYSTEM CATEGORY FILTER TABS
+            SizedBox(
+              height: 30,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: SolarisSpacing.lg),
+                itemCount: _categories.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 6),
+                itemBuilder: (context, idx) {
+                  final cat = _categories[idx];
+                  final count = _categoryCounts[cat] ?? 0;
+                  final isSelected = _selectedCategory == cat;
+
+                  return GestureDetector(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() {
+                        _selectedCategory = cat;
+                        _recomputeFilteredApps();
+                      });
+                      if (_scrollController.hasClients) {
+                        _scrollController.jumpTo(0.0);
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isSelected ? SolarisColors.cyan.withOpacity(0.18) : SolarisColors.cardBg,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: isSelected ? SolarisColors.cyan : SolarisColors.borderMuted,
+                          width: isSelected ? 1.2 : 0.6,
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            cat,
+                            style: TextStyle(
+                              fontFamily: 'Orbitron',
+                              color: isSelected ? SolarisColors.cyan : SolarisColors.textSecondary,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '[$count]',
+                            style: TextStyle(
+                              fontFamily: 'JetBrainsMono',
+                              color: isSelected ? SolarisColors.cyan : SolarisColors.textMuted,
+                              fontSize: 8,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            const SizedBox(height: SolarisSpacing.xs),
+
+            // 4-COLUMN RESPONSIVE APP MATRIX GRID WITH VIVO-STYLE ALPHABET SCROLLBAR
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final availableHeight = constraints.maxHeight;
+                  final availableWidth = constraints.maxWidth;
+                  final gridWidth = (availableWidth - 36);
+                  final contentWidth = gridWidth - (SolarisSpacing.md + 4);
+                  final itemWidth = (contentWidth - 24) / 4.0;
+                  final itemHeight = itemWidth / 0.74;
+                  final rowHeight = itemHeight + 10.0;
+
+                  return Stack(
+                    children: [
+                      Row(
+                        children: [
+                          // Main Grid
+                          Expanded(
+                            child: _filteredApps.isEmpty
+                                ? Center(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: const [
+                                        Icon(Icons.radar, color: SolarisColors.cyan, size: 36),
+                                        SizedBox(height: 10),
+                                        Text(
+                                          'ZERO TARGETS DETECTED IN SECTOR',
+                                          style: TextStyle(
+                                            fontFamily: 'JetBrainsMono',
+                                            color: SolarisColors.textMuted,
+                                            fontSize: 11,
+                                            letterSpacing: 1.2,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                : GridView.builder(
+                                    controller: _scrollController,
+                                    physics: const AlwaysScrollableScrollPhysics(
+                                      parent: BouncingScrollPhysics(),
+                                    ),
+                                    padding: const EdgeInsets.only(
+                                      left: SolarisSpacing.md,
+                                      right: 4,
+                                      top: SolarisSpacing.xs,
+                                      bottom: SolarisSpacing.xl,
+                                    ),
+                                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: 4,
+                                      childAspectRatio: 0.74,
+                                      crossAxisSpacing: 8,
+                                      mainAxisSpacing: 10,
+                                    ),
+                                    itemCount: _filteredApps.length,
+                                    itemBuilder: (cellContext, idx) {
+                                      final app = _filteredApps[idx];
+                                      final name = app['name'] as String? ?? 'UNKNOWN';
+                                      final pkg = app['package'] as String? ?? '';
+                                      final cls = app['class'] as String?;
+                                      final iconPath = app['iconPath'] as String?;
+                                      final catTag = widget.classifyApp(pkg, name);
+
+                                      final letterKey = _getAppLetterKey(name);
+                                      final isFirstOfLetter = (idx == 0) ||
+                                          (_getAppLetterKey(_filteredApps[idx - 1]['name'] as String?) != letterKey);
+
+                                      return RepaintBoundary(
+                                        child: Material(
+                                          color: Colors.transparent,
+                                          child: InkWell(
+                                            borderRadius: BorderRadius.circular(8),
+                                            splashColor: SolarisColors.cyan.withOpacity(0.20),
+                                            highlightColor: SolarisColors.cyan.withOpacity(0.08),
+                                            onTap: () {
+                                              HapticFeedback.lightImpact();
+                                              widget.onLaunchApp(cellContext, name, pkg, cls, iconPath);
+                                            },
+                                            child: Container(
+                                              decoration: BoxDecoration(
+                                                color: SolarisColors.cardBg,
+                                                borderRadius: BorderRadius.circular(8),
+                                                border: Border.all(
+                                                  color: isFirstOfLetter
+                                                      ? SolarisColors.cyan.withOpacity(0.5)
+                                                      : SolarisColors.borderMuted,
+                                                  width: isFirstOfLetter ? 1.0 : 0.6,
                                                 ),
-                                                const SizedBox(height: 5),
-                                                Text(
-                                                  name,
-                                                  maxLines: 1,
-                                                  overflow: TextOverflow.ellipsis,
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(
-                                                    fontFamily: 'Rajdhani',
-                                                    color: SolarisColors.textPrimary,
-                                                    fontSize: 11,
-                                                    fontWeight: FontWeight.bold,
+                                              ),
+                                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                                              child: Stack(
+                                                clipBehavior: Clip.none,
+                                                children: [
+                                                  // Letter Section Indicator Badge on First App of Letter
+                                                  if (isFirstOfLetter)
+                                                    Positioned(
+                                                      top: 0,
+                                                      left: 0,
+                                                      child: Container(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                                                        decoration: BoxDecoration(
+                                                          color: SolarisColors.cyan.withOpacity(0.18),
+                                                          borderRadius: BorderRadius.circular(3),
+                                                          border: Border.all(
+                                                            color: SolarisColors.cyan.withOpacity(0.6),
+                                                            width: 0.6,
+                                                          ),
+                                                        ),
+                                                        child: Text(
+                                                          letterKey,
+                                                          style: const TextStyle(
+                                                            fontFamily: 'Orbitron',
+                                                            color: SolarisColors.cyan,
+                                                            fontSize: 7.5,
+                                                            fontWeight: FontWeight.bold,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+
+                                                  // Card Content
+                                                  Center(
+                                                    child: Column(
+                                                      mainAxisAlignment: MainAxisAlignment.center,
+                                                      children: [
+                                                        const SizedBox(height: 2),
+                                                        SolarisAppIcon(
+                                                          packageName: pkg,
+                                                          directIconPath: iconPath,
+                                                          size: 46,
+                                                          fallbackLetter: name,
+                                                        ),
+                                                        const SizedBox(height: 5),
+                                                        Text(
+                                                          name,
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow.ellipsis,
+                                                          textAlign: TextAlign.center,
+                                                          style: const TextStyle(
+                                                            fontFamily: 'Rajdhani',
+                                                            color: SolarisColors.textPrimary,
+                                                            fontSize: 11,
+                                                            fontWeight: FontWeight.bold,
+                                                          ),
+                                                        ),
+                                                        Text(
+                                                          '$catTag-${(idx + 1).toString().padLeft(2, '0')}',
+                                                          style: const TextStyle(
+                                                            fontFamily: 'JetBrainsMono',
+                                                            color: SolarisColors.textMuted,
+                                                            fontSize: 7,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
                                                   ),
-                                                ),
-                                                Text(
-                                                  '$catTag-${(idx + 1).toString().padLeft(2, '0')}',
-                                                  style: const TextStyle(
-                                                    fontFamily: 'JetBrainsMono',
-                                                    color: SolarisColors.textMuted,
-                                                    fontSize: 7,
-                                                  ),
-                                                ),
-                                              ],
+                                                ],
+                                              ),
                                             ),
                                           ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+
+                          // VIVO-STYLE ALPHABET SCROLLBAR RAIL
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onVerticalDragStart: (d) => _handleAlphabetTouch(
+                              localY: d.localPosition.dy,
+                              railHeight: availableHeight,
+                              availableHeight: availableHeight,
+                              rowHeight: rowHeight,
+                            ),
+                            onVerticalDragUpdate: (d) => _handleAlphabetTouch(
+                              localY: d.localPosition.dy,
+                              railHeight: availableHeight,
+                              availableHeight: availableHeight,
+                              rowHeight: rowHeight,
+                            ),
+                            onVerticalDragEnd: (_) => _finishAlphabetTouch(),
+                            onVerticalDragCancel: () => _finishAlphabetTouch(),
+                            onTapDown: (d) {
+                              _handleAlphabetTouch(
+                                localY: d.localPosition.dy,
+                                railHeight: availableHeight,
+                                availableHeight: availableHeight,
+                                rowHeight: rowHeight,
+                              );
+                              _finishAlphabetTouch();
+                            },
+                            child: Container(
+                              width: 36, // Generous touch hit area
+                              margin: const EdgeInsets.only(right: 2, top: 4, bottom: 8),
+                              alignment: Alignment.center,
+                              child: Container(
+                                width: 18, // Sleek visual column
+                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0x77080F1D),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: SolarisColors.cyan.withOpacity(0.4),
+                                    width: 0.8,
+                                  ),
+                                ),
+                                child: ValueListenableBuilder<String?>(
+                                  valueListenable: _activeRailLetterNotifier,
+                                  builder: (context, activeLetter, _) {
+                                    return Column(
+                                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                      children: _alphabet.map((letter) {
+                                        final isActive = activeLetter == letter;
+                                        return Text(
+                                          letter,
+                                          style: TextStyle(
+                                            fontFamily: 'Orbitron',
+                                            fontSize: isActive ? 9.5 : 7.5,
+                                            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+                                            color: isActive
+                                                ? SolarisColors.cyan
+                                                : SolarisColors.textMuted.withOpacity(0.7),
+                                            shadows: isActive
+                                                ? [
+                                                    Shadow(
+                                                      color: SolarisColors.cyan.withOpacity(0.8),
+                                                      blurRadius: 6,
+                                                    )
+                                                  ]
+                                                : null,
+                                          ),
                                         );
-                                      },
+                                      }).toList(),
                                     );
                                   },
                                 ),
-                        ),
-
-                        // VIVO-STYLE ALPHABET SCROLLBAR RAIL
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onVerticalDragStart: (d) => _handleAlphabetTouch(
-                            localY: d.localPosition.dy,
-                            railHeight: availableHeight,
-                            filtered: filtered,
-                            availableHeight: availableHeight,
-                            rowHeight: rowHeight,
-                          ),
-                          onVerticalDragUpdate: (d) => _handleAlphabetTouch(
-                            localY: d.localPosition.dy,
-                            railHeight: availableHeight,
-                            filtered: filtered,
-                            availableHeight: availableHeight,
-                            rowHeight: rowHeight,
-                          ),
-                          onVerticalDragEnd: (_) => _finishAlphabetTouch(),
-                          onVerticalDragCancel: () => _finishAlphabetTouch(),
-                          onTapDown: (d) {
-                            _handleAlphabetTouch(
-                              localY: d.localPosition.dy,
-                              railHeight: availableHeight,
-                              filtered: filtered,
-                              availableHeight: availableHeight,
-                              rowHeight: rowHeight,
-                            );
-                            _finishAlphabetTouch();
-                          },
-                          child: Container(
-                            width: 28,
-                            margin: const EdgeInsets.only(right: 2, top: 4, bottom: 8),
-                            padding: const EdgeInsets.symmetric(horizontal: 2),
-                            decoration: BoxDecoration(
-                              color: const Color(0x77080F1D),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: SolarisColors.cyan.withOpacity(0.4), width: 0.8),
-                            ),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: _alphabet.map((letter) {
-                                final isActive = _activeLetter == letter;
-                                return Text(
-                                  letter,
-                                  style: TextStyle(
-                                    fontFamily: 'Rajdhani',
-                                    fontSize: 8.5,
-                                    fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-                                    color: isActive ? SolarisColors.cyan : SolarisColors.textMuted,
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    // FLOATING HOLOGRAPHIC RETICLE BUBBLE
-                    if (_isScrubbingAlphabet && _activeLetter != null)
-                      Positioned(
-                        right: 30,
-                        top: (_scrubBubbleY - 30).clamp(10.0, availableHeight - 70.0),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: const Color(0xF2070D18),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: SolarisColors.cyan, width: 1.5),
-                            boxShadow: [
-                              BoxShadow(
-                                color: SolarisColors.cyan.withOpacity(0.4),
-                                blurRadius: 18,
-                                spreadRadius: 1,
                               ),
-                            ],
+                            ),
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                _activeLetter!,
-                                style: const TextStyle(
-                                  fontFamily: 'Orbitron',
-                                  color: SolarisColors.cyan,
-                                  fontSize: 26,
-                                  fontWeight: FontWeight.bold,
+                        ],
+                      ),
+
+                      // FLOATING HOLOGRAPHIC RETICLE BUBBLE
+                      ValueListenableBuilder<_AlphabetScrubData?>(
+                        valueListenable: _scrubNotifier,
+                        builder: (context, data, _) {
+                          if (data == null) return const SizedBox.shrink();
+
+                          final bubbleTop = (data.y - 30).clamp(10.0, availableHeight - 74.0);
+
+                          return Positioned(
+                            right: 42,
+                            top: bubbleTop,
+                            child: IgnorePointer(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xF2070D18),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: SolarisColors.cyan, width: 1.5),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: SolarisColors.cyan.withOpacity(0.4),
+                                      blurRadius: 18,
+                                      spreadRadius: 1,
+                                    ),
+                                  ],
                                 ),
-                              ),
-                              if (_previewAppName.isNotEmpty) ...[
-                                const SizedBox(width: 10),
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(maxWidth: 130),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Text(
-                                        'TARGET ACQUIRED',
-                                        style: TextStyle(
-                                          fontFamily: 'JetBrainsMono',
-                                          color: SolarisColors.emerald,
-                                          fontSize: 7,
-                                          fontWeight: FontWeight.bold,
-                                          letterSpacing: 1.0,
-                                        ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      data.letter,
+                                      style: const TextStyle(
+                                        fontFamily: 'Orbitron',
+                                        color: SolarisColors.cyan,
+                                        fontSize: 26,
+                                        fontWeight: FontWeight.bold,
                                       ),
-                                      Text(
-                                        _previewAppName.toUpperCase(),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontFamily: 'Rajdhani',
-                                          color: SolarisColors.textPrimary,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
+                                    ),
+                                    if (data.appName.isNotEmpty) ...[
+                                      const SizedBox(width: 10),
+                                      ConstrainedBox(
+                                        constraints: const BoxConstraints(maxWidth: 130),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Text(
+                                              'TARGET ACQUIRED',
+                                              style: TextStyle(
+                                                fontFamily: 'JetBrainsMono',
+                                                color: SolarisColors.emerald,
+                                                fontSize: 7,
+                                                fontWeight: FontWeight.bold,
+                                                letterSpacing: 1.0,
+                                              ),
+                                            ),
+                                            Text(
+                                              data.appName.toUpperCase(),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontFamily: 'Rajdhani',
+                                                color: SolarisColors.textPrimary,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
                                     ],
-                                  ),
+                                  ],
                                 ),
-                              ],
-                            ],
-                          ),
-                        ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                  ],
-                );
-              },
+                    ],
+                  );
+                },
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
